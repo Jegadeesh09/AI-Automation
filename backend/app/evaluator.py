@@ -25,9 +25,10 @@ class CombinedMetric(BaseMetric):
             return None
 
         # Strip markdown fences and extra whitespace
-        candidate = re.sub(r"```[a-zA-Z0-9]*\n|```", "", text)
+        candidate = re.sub(r"```(?:json)?\n?|```", "", text, flags=re.IGNORECASE)
         candidate = candidate.strip()
 
+        # Try to find the start of a JSON object or array
         start = candidate.find("{")
         if start == -1:
             return None
@@ -68,20 +69,20 @@ class CombinedMetric(BaseMetric):
         expected_str = test_case.expected_output if test_case.expected_output else "NOT PROVIDED"
         
         if self.mode == "Light":
-            metrics_desc = "1. Correctness (vs Expected)\n2. Relevancy (vs Question)\n3. Hallucination (Grounding)"
-            json_fields = '"correctness": <float>, "relevancy": <float>, "hallucination": <float>'
-            weights = {"correctness": 0.45, "relevancy": 0.35, "hallucination": 0.20}
+            metrics_desc = "1. Similarity (vs Expected)\n2. Relevancy (vs Question)\n3. Hallucination (Grounding)"
+            json_fields = '"similarity": <float>, "relevancy": <float>, "hallucination": <float>'
+            weights = {"similarity": 0.45, "relevancy": 0.35, "hallucination": 0.20}
         elif self.mode == "Full":
-            metrics_desc = "1. Correctness, 2. Relevancy, 3. Faithfulness, 4. Hallucination, 5. Context Precision, 6. Context Recall, 7. Toxicity, 8. Bias"
-            json_fields = '"correctness": <float>, "relevancy": <float>, "faithfulness": <float|null>, "hallucination": <float>, "context_precision": <float|null>, "context_recall": <float|null>, "toxicity": <float>, "bias": <float>'
+            metrics_desc = "1. Similarity, 2. Relevancy, 3. Faithfulness, 4. Hallucination, 5. Precision, 6. Recall, 7. Toxicity, 8. Bias"
+            json_fields = '"similarity": <float>, "relevancy": <float>, "faithfulness": <float|null>, "hallucination": <float>, "precision": <float|null>, "recall": <float|null>, "toxicity": <float>, "bias": <float>'
             weights = {
-                "correctness": 0.25, "faithfulness": 0.20, "relevancy": 0.15, "hallucination": 0.15,
-                "context_precision": 0.10, "context_recall": 0.10, "toxicity": 0.03, "bias": 0.02
+                "similarity": 0.25, "faithfulness": 0.20, "relevancy": 0.15, "hallucination": 0.15,
+                "precision": 0.10, "recall": 0.10, "toxicity": 0.03, "bias": 0.02
             }
         else: # Standard
-            metrics_desc = "1. Correctness, 2. Relevancy, 3. Faithfulness, 4. Hallucination"
-            json_fields = '"correctness": <float>, "relevancy": <float>, "faithfulness": <float|null>, "hallucination": <float>'
-            weights = {"correctness": 0.35, "relevancy": 0.25, "faithfulness": 0.25, "hallucination": 0.15}
+            metrics_desc = "1. Similarity, 2. Relevancy, 3. Faithfulness, 4. Hallucination"
+            json_fields = '"similarity": <float>, "relevancy": <float>, "faithfulness": <float|null>, "hallucination": <float>'
+            weights = {"similarity": 0.35, "relevancy": 0.25, "faithfulness": 0.25, "hallucination": 0.15}
 
         prompt = f"""
         You are an expert AI evaluator assessing response quality for the TruthCheck AI framework.
@@ -124,20 +125,25 @@ class CombinedMetric(BaseMetric):
         """
         
         try:
+            logger.info(f"Starting evaluation with mode: {self.mode}")
             raw_res = self.model.generate(prompt)
             raw_res = self._normalize_raw_response(raw_res)
-            logger.debug("Evaluator raw response: %s", raw_res[:2000] if len(raw_res) > 2000 else raw_res)
+            logger.info("Evaluator raw response received.")
+            logger.debug(f"Full raw response: {raw_res}")
 
             json_str = self._extract_json_object(raw_res)
             if not json_str:
-                logger.warning("Evaluator output did not contain a valid JSON object. Raw response: %s", raw_res[:2000])
+                logger.error("Evaluator output did not contain a valid JSON object.")
+                logger.info(f"Raw response head: {raw_res[:500]}")
                 self.reason = "Failed to parse evaluation JSON from model output."
                 return
 
             try:
                 data = json.loads(json_str)
+                logger.info("Successfully parsed evaluation JSON.")
             except json.JSONDecodeError as exc:
-                logger.warning("Failed to decode evaluator JSON object: %s; extracted JSON: %s", exc, json_str[:2000])
+                logger.error(f"Failed to decode evaluator JSON object: {exc}")
+                logger.info(f"Extracted JSON string: {json_str[:500]}")
                 self.reason = f"Failed to decode evaluation JSON: {exc}."
                 return
 
@@ -167,12 +173,23 @@ class CombinedMetric(BaseMetric):
             for k, w in weights.items():
                 val = raw_metrics.get(k)
                 if val is not None:
-                    total_weighted += (float(val) * w)
+                    # Normalize to 0-1 scale for weighted calculation
+                    norm_val = float(val)
+                    if norm_val > 1: norm_val /= 100
+
+                    total_weighted += (norm_val * w)
                     available_weight += w
 
             final_score = (total_weighted / available_weight) if available_weight > 0 else 0
+
+            # If metrics were empty or weights didn't match, fallback to the overall_score from LLM
+            if available_weight == 0 and data.get("overall_score") is not None:
+                final_score = float(data["overall_score"])
+                if final_score > 1: final_score /= 100
+
             data["overall_score"] = round(final_score, 3)
 
+            # Standardize status based on score
             if final_score >= 0.8:
                 data["status"] = "PASS"
             elif final_score >= 0.5:
@@ -181,11 +198,15 @@ class CombinedMetric(BaseMetric):
                 data["status"] = "FAIL"
 
             data["metrics"] = formatted_metrics
-            data["judge_reasoning"] = data.get("judge_reasoning", data.get("summary", ""))
+            # Ensure reasoning is captured from either field
+            judge_reasoning = data.get("judge_reasoning") or data.get("summary") or ""
+            data["judge_reasoning"] = judge_reasoning
+            data["summary"] = judge_reasoning
+
             self.full_data = data
             self.score = final_score
             self.individual_scores = raw_metrics
-            self.reason = data.get("summary", "")
+            self.reason = judge_reasoning
         except Exception as e:
             logger.exception("Evaluator failure.")
             self.reason = f"Evaluation error: {str(e)}"
@@ -218,6 +239,10 @@ class Evaluator:
         if not isinstance(retrieval_context, list):
             retrieval_context = [str(retrieval_context)] if retrieval_context else []
 
+        # Handle empty/missing expected output
+        if not expected_output or expected_output.strip().lower() in ["nan", "none", "n/a"]:
+            expected_output = None
+
         test_case = LLMTestCase(
             input=prompt,
             actual_output=actual_output,
@@ -229,10 +254,12 @@ class Evaluator:
         combined.measure(test_case)
         
         full = combined.full_data
+        reason = full.get("judge_reasoning") or full.get("summary") or combined.reason
+
         return {
             "score": round(combined.score * 100),
-            "reason": full.get("summary", combined.reason),
-            "judge_reasoning": full.get("judge_reasoning", full.get("summary", combined.reason)),
+            "reason": reason,
+            "judge_reasoning": reason,
             "status": full.get("status", "FAIL"),
             "metrics": full.get("metrics", {}),
             "issues": full.get("issues", []),

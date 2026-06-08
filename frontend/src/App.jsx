@@ -561,7 +561,7 @@ const VikingGenAIApp = () => {
                              ))}
                              <td className="p-6 align-top text-center text-[10px] uppercase tracking-wider">{r.semantic_comparison?.match_status || 'N/A'}</td>
                              <td className="p-6 align-top text-xs text-red-400 font-bold">{r.root_cause || 'N/A'}</td>
-                             <td className="p-6 align-top text-[10px] leading-relaxed whitespace-pre-wrap">{r.reason}</td>
+                             <td className="p-6 align-top text-[10px] leading-relaxed whitespace-pre-wrap">{r.judge_reasoning || r.reason}</td>
                            </tr>
                          ))}
                        </tbody>
