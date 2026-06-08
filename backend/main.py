@@ -131,9 +131,11 @@ async def export_results(payload: Any = Body(...), format: str = "xlsx"):
         'prompt': 'Prompt',
         'response': 'Response',
         'expected': 'Expected',
-        'score': 'Score',
+        'score': 'Score %',
         'status': 'Status',
-        'performance': 'Execution Time'
+        'performance': 'Execution Time',
+        'judge_reasoning': 'Judge Reasoning',
+        'root_cause': 'Root Cause'
     })
 
     if format == "xlsx":
@@ -243,10 +245,12 @@ async def export_results(payload: Any = Body(...), format: str = "xlsx"):
             for metric in metric_keys:
                 row_data.append(format_export_metric(r.get('metrics', {}).get(metric)))
 
+            reasoning = r.get('judge_reasoning') or r.get('reason') or ''
+
             row_data += [
                 str(r.get('semantic_comparison', {}).get('match_status', 'N/A')),
                 str(r.get('root_cause', 'N/A')),
-                str(r.get('reason', '')),
+                str(reasoning),
                 f"{float(r.get('performance', 0)):.2f}s"
             ]
 
@@ -436,12 +440,26 @@ async def evaluate(
                 if context:
                     augmented_prompt = f"Context:\n" + "\n".join(context) + f"\n\nQuestion: {prompt}"
 
-                output, _, msg_id, latency = await asyncio.to_thread(
+                logger.info(f"Executing row {idx+1}: Prompt={prompt[:50]}...")
+
+                output, retrieval_context, msg_id, latency = await asyncio.to_thread(
                     viking_api.send_message, session_id, augmented_prompt, api_key=viking_api_key
                 )
 
+                # If Viking returned context, use it for evaluation
+                if retrieval_context and not context:
+                    context = retrieval_context
+
                 expected = str(row.get('Expected Response', ""))
+                if pd.isna(row.get('Expected Response')):
+                    expected = ""
+
+                logger.info(f"Evaluating row {idx+1}: Actual Response={output[:50]}... Expected={expected[:50]}...")
+
                 eval_res = await asyncio.to_thread(evaluator.evaluate, prompt, output, context, expected)
+
+                logger.info(f"Evaluation result for row {idx+1}: Score={eval_res['score']}, Status={eval_res['status']}")
+                logger.debug(f"Full eval response: {json.dumps(eval_res, indent=2)}")
 
                 results.append({
                     "prompt": prompt,
