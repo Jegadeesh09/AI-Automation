@@ -1,0 +1,61 @@
+flowchart LR
+  subgraph User[User Interaction]
+    Browser["/User Browser/"]
+    Frontend["React + Vite Frontend"]
+  end
+
+  subgraph Backend[FastAPI Backend]
+    FileParser["File Parser<br/>(Pandas)"]
+    ConfigManager["Config Manager<br/>(JSON persistence)"]
+    VikingAPI["Viking API Wrapper"]
+    Evaluator["Evaluator Service<br/>(Gemini + DeepEval)"]
+    Health["Health & Ops Endpoint"]
+  end
+
+  subgraph External[External Services]
+    VikingService["Viking Pump API"]
+    Gemini["Google Gemini / DeepEval"]
+  end
+
+  subgraph Orchestration[Runtime Orchestration]
+    RunApp["run_app.py startup orchestrator"]
+  end
+
+  Browser -->|Uploads XLSX/CSV| Frontend
+  Browser -->|Views results / triggers export| Frontend
+
+  Frontend -->|POST /api/evaluate| Backend
+  Frontend -->|POST /api/export| Backend
+  Frontend -->|GET /api/config| Backend
+  Frontend -->|POST /api/config| Backend
+  Frontend -->|POST /api/test-rag| Backend
+  Frontend -->|WS /ws/logs| Backend
+
+  Backend -->|Returns JSON results| Frontend
+  Backend -->|Streams export file| Browser
+
+  Backend -->|Reads files| FileParser
+  Backend -->|Loads/stores settings| ConfigManager
+  Backend -->|Calls Viking API| VikingAPI
+  Backend -->|Runs semantic scoring| Evaluator
+  Backend -->|Reports health| Health
+
+  VikingAPI -->|External request| VikingService
+  Evaluator -->|Semantic scoring| Gemini
+  RunApp --> Backend
+  RunApp --> Frontend
+
+  style User fill:#FFFFFF,stroke:#38BDF8,stroke-width:2px
+  style Backend fill:#FFFFFF,stroke:#10B981,stroke-width:2px
+  style External fill:#FFFFFF,stroke:#F97316,stroke-width:2px
+  style Orchestration fill:#FFFFFF,stroke:#A855F7,stroke-width:2px
+  style Browser fill:#FFFFFF,stroke:#60A5FA,stroke-width:2px
+  style Frontend fill:#FFFFFF,stroke:#38BDF8,stroke-width:2px
+  style FileParser fill:#FFFFFF,stroke:#22C55E,stroke-width:2px
+  style ConfigManager fill:#FFFFFF,stroke:#22C55E,stroke-width:2px
+  style VikingAPI fill:#FFFFFF,stroke:#FBBF24,stroke-width:2px
+  style Evaluator fill:#FFFFFF,stroke:#818CF8,stroke-width:2px
+  style Health fill:#FFFFFF,stroke:#94A3B8,stroke-width:1px,stroke-dasharray: 5 5
+  style VikingService fill:#FFFFFF,stroke:#34D399,stroke-width:2px
+  style Gemini fill:#FFFFFF,stroke:#93C5FD,stroke-width:2px
+  style RunApp fill:#FFFFFF,stroke:#C084FC,stroke-width:2px

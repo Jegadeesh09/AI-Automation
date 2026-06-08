@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+pandas
+openpyxl
+google-generativeai
+google-genai
+requests
+deepeval
+python-multipart
+python-dotenv
+fpdf2
+xlsxwriter
